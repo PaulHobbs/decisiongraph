@@ -12,15 +12,17 @@ func TestNodeExecutionCount(t *testing.T) {
 	g := NewGraph()
 	g.AddNode("A", nil)
 	g.AddNode("B1", []string{"A"})
+	g.AddNode("B2", []string{"A"})
+	g.AddNode("B3", []string{"A"})
 
 	executionCounts := make(map[string]int)
 	var mu sync.Mutex
 
-	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Input) (*Input, error) {
+	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
 		mu.Lock()
 		executionCounts[node.ID]++
 		mu.Unlock()
-		return &Input{NodeID: node.ID, Data: "result"}, nil
+		return &Value{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err != nil {
@@ -46,12 +48,12 @@ func TestParallelExecution(t *testing.T) {
 		executionTimes = make(map[string]time.Time)
 	)
 
-	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Input) (*Input, error) {
+	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
 		mu.Lock()
 		executionTimes[node.ID] = time.Now()
 		mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
-		return &Input{NodeID: node.ID, Data: "result"}, nil
+		return &Value{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err != nil {
@@ -83,7 +85,7 @@ func TestErrorPropagation(t *testing.T) {
 	executed := make(map[string]bool)
 	var mu sync.Mutex
 
-	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Input) (*Input, error) {
+	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
 		mu.Lock()
 		executed[node.ID] = true
 		mu.Unlock()
@@ -91,7 +93,7 @@ func TestErrorPropagation(t *testing.T) {
 		if node.ID == "B" {
 			return nil, expectedErr
 		}
-		return &Input{NodeID: node.ID, Data: "result"}, nil
+		return &Value{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err == nil {
@@ -124,12 +126,12 @@ func TestContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := g.Run(ctx, func(ctx context.Context, node *Node, inputs []*Input) (*Input, error) {
+	err := g.Run(ctx, func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
 		mu.Lock()
 		executed[node.ID] = true
 		mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
-		return &Input{NodeID: node.ID, Data: "result"}, nil
+		return &Value{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err == nil {

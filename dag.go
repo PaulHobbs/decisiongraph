@@ -114,7 +114,6 @@ func (nc *nodeCtx) runNode(ctx context.Context) {
 	inputs := make([]*Value, 0, len(n.Requires))
 	for e, channel := range nc.ingress {
 		fmt.Printf("[DEBUG] Node %s waiting for input from %s\n", n.ID, e.from)
-		e := edge{from: e.from, to: n.ID}
 		select {
 		case <-ctx.Done():
 			fmt.Printf("[DEBUG] Context cancelled while node %s waiting for %s\n", n.ID, e.from)

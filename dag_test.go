@@ -145,24 +145,26 @@ func TestContextCancellation(t *testing.T) {
 	}
 }
 
-func generateRandomDAG(numNodes int) (*Graph, error) {
+func generateRandomDAG(numNodes int, seed int64) (*Graph, error) {
+	gen := rand.New(rand.NewSource(seed))
 	g := NewGraph()
+	fmt.Printf("numNodes: %d\n", numNodes)
 	nodes := make([]string, numNodes)
 	for i := 0; i < numNodes; i++ {
 		nodes[i] = fmt.Sprintf("Node%d", i)
 	}
 
-	for i := 0; i < numNodes; i++ {
+	for i := 0; i < int(numNodes); i++ {
 		var numDependencies int
 		if i == 0 {
 			numDependencies = 0
 		} else {
-			numDependencies = rand.Intn(i) // A node can only depend on nodes with smaller index to avoid cycles.
+			numDependencies = gen.Intn(i) // A node can only depend on nodes with smaller index to avoid cycles.
 		}
 
 		dependencies := make([]string, 0)
 		for j := 0; j < numDependencies; j++ {
-			dependencyIndex := rand.Intn(i)
+			dependencyIndex := gen.Intn(i)
 			dependencies = append(dependencies, nodes[dependencyIndex])
 		}
 		err := g.AddNode(nodes[i], dependencies)
@@ -174,13 +176,13 @@ func generateRandomDAG(numNodes int) (*Graph, error) {
 }
 
 func FuzzDAGExecution(f *testing.F) {
-	f.Add(10) // Add an example seed corpus value.
-	f.Fuzz(func(t *testing.T, numNodes int) {
-		if numNodes <= 0 || numNodes > 50 { // Limit the number of nodes for practical testing.
-			return
-		}
+	for numNodes := uint(0); numNodes < 100; numNodes++ {
+		f.Add(numNodes, int64(42)) // Add an example seed corpus value.
+	}
 
-		g, err := generateRandomDAG(numNodes)
+	f.Fuzz(func(t *testing.T, numNodes uint, seed int64) {
+		numNodes = (numNodes % 100) + 1
+		g, err := generateRandomDAG(int(numNodes), seed)
 		if err != nil {
 			t.Fatalf("failed to generate random DAG: %v", err)
 		}

@@ -51,15 +51,94 @@ func (g *Graph) AddNode(id string, requires []string) error {
 	return nil
 }
 
-func (g *Graph) broadcastOutput(nodeID string, result output, edges map[edge]chan output) {
-	fmt.Printf("[DEBUG] Broadcasting output from node %s (err: %v)\n", nodeID, result.err)
-	for _, depNode := range g.Nodes {
-		if e := (edge{from: nodeID, to: depNode.ID}); edges[e] != nil {
-			fmt.Printf("[DEBUG] Sending output from %s to %s\n", nodeID, depNode.ID)
-			edges[e] <- result
-			fmt.Printf("[DEBUG] Sent output from %s to %s\n", nodeID, depNode.ID)
+type nodeCtx struct {
+	self        *Node
+	ingress     map[edge]chan output
+	egress      map[edge]chan output
+	executeNode ExecuteNode
+}
+
+func newNodeCtx(self *Node, edges map[edge]chan output, executeNode ExecuteNode) nodeCtx {
+	ingress := make(map[edge]chan output)
+	egress := make(map[edge]chan output)
+	for e, channel := range edges {
+		if e.from == self.ID {
+			egress[e] = channel
+		} else if e.to == self.ID {
+			ingress[e] = channel
 		}
 	}
+	return nodeCtx{self: self, ingress: ingress, egress: egress, executeNode: executeNode}
+}
+
+func (nc *nodeCtx) broadcast(result output) {
+	fmt.Printf("[DEBUG] Broadcasting output from node %s (err: %v)\n", nc.self.ID, result.err)
+	for e, channel := range nc.egress {
+		fmt.Printf("[DEBUG] Sending output from %s to %s\n", e.from, e.to)
+		channel <- result
+		fmt.Printf("[DEBUG] Sent output from %s to %s\n", e.from, e.to)
+	}
+}
+
+func (nc *nodeCtx) runFinish(ctx context.Context) []error {
+	// Handle FINISH node differently: collect results instead of executing
+	fmt.Printf("[DEBUG] Starting FINISH node to collect results\n")
+	var leafErrors []error
+	for e, channel := range nc.ingress {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[DEBUG] Context cancelled while FINISH node waiting for %s\n", e.from)
+			return leafErrors
+		case result := <-channel:
+			if result.err != nil {
+				leafErrors = append(leafErrors, fmt.Errorf("leaf node %s failed: %w", e.from, result.err))
+			} else {
+				fmt.Printf("[DEBUG] FINISH node received result from %s: %v\n", e.from, result.value)
+			}
+		}
+	}
+	if len(leafErrors) > 0 {
+		fmt.Printf("[DEBUG] FINISH node detected errors: %v\n", leafErrors)
+	} else {
+		fmt.Printf("[DEBUG] FINISH node completed successfully\n")
+	}
+	return leafErrors
+
+}
+
+func (nc *nodeCtx) runNode(ctx context.Context) {
+	n := nc.self
+	startTime := time.Now()
+	fmt.Printf("[DEBUG] Starting execution of node %s at %v\n", n.ID, startTime)
+
+	inputs := make([]*Value, 0, len(n.Requires))
+	for e, channel := range nc.ingress {
+		fmt.Printf("[DEBUG] Node %s waiting for input from %s\n", n.ID, e.from)
+		e := edge{from: e.from, to: n.ID}
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[DEBUG] Context cancelled while node %s waiting for %s\n", n.ID, e.from)
+			result := output{err: ctx.Err()}
+			nc.broadcast(result)
+			return
+		case result := <-channel:
+			fmt.Printf("[DEBUG] Node %s received input from %s (err: %v)\n", n.ID, e.from, result.err)
+			if result.err != nil {
+				result = output{err: fmt.Errorf("dependency %s failed: %w", e.from, result.err)}
+				nc.broadcast(result)
+				return
+			}
+			inputs = append(inputs, result.value)
+		}
+	}
+
+	fmt.Printf("[DEBUG] Node %s executing with %d inputs\n", n.ID, len(inputs))
+	value, err := nc.executeNode(ctx, n, inputs)
+	result := output{value: value, err: err}
+	fmt.Printf("[DEBUG] Node %s execution completed with err: %v\n", n.ID, err)
+	nc.broadcast(result)
+
+	fmt.Printf("[DEBUG] Completed execution of node %s, took %v\n", n.ID, time.Since(startTime))
 }
 
 func (g *Graph) Run(ctx context.Context, executeNode ExecuteNode) error {
@@ -76,7 +155,7 @@ func (g *Graph) Run(ctx context.Context, executeNode ExecuteNode) error {
 		}
 	}
 
-	// Add FINISH node to the graph
+	// Add FINISH node to the graph. This allows collecting the output of all the leaf nodes.
 	finishNode := &Node{
 		ID:       "FINISH",
 		Requires: make([]string, 0, len(leafNodes)),
@@ -103,68 +182,14 @@ func (g *Graph) Run(ctx context.Context, executeNode ExecuteNode) error {
 	// Start each node in its own goroutine, including FINISH
 	for _, node := range g.Nodes {
 		wg.Add(1)
-		go func(n *Node) {
+		go func(self *Node) {
 			defer wg.Done()
-
-			if n.ID == "FINISH" {
-				// Handle FINISH node differently: collect results instead of executing
-				fmt.Printf("[DEBUG] Starting FINISH node to collect results\n")
-				for _, reqID := range n.Requires {
-					e := edge{from: reqID, to: n.ID}
-					select {
-					case <-ctx.Done():
-						fmt.Printf("[DEBUG] Context cancelled while FINISH node waiting for %s\n", reqID)
-						return
-					case result := <-edges[e]:
-						if result.err != nil {
-							leafErrors = append(leafErrors, fmt.Errorf("leaf node %s failed: %w", reqID, result.err))
-						} else {
-							fmt.Printf("[DEBUG] FINISH node received result from %s: %v\n", reqID, result.value)
-						}
-					}
-				}
-				if len(leafErrors) > 0 {
-					fmt.Printf("[DEBUG] FINISH node detected errors: %v\n", leafErrors)
-				} else {
-					fmt.Printf("[DEBUG] FINISH node completed successfully\n")
-				}
+			nc := newNodeCtx(self, edges, executeNode)
+			if self.ID == "FINISH" {
+				leafErrors = nc.runFinish(ctx)
 				return
 			}
-
-			// Regular node execution
-			startTime := time.Now()
-			fmt.Printf("[DEBUG] Starting execution of node %s at %v\n", n.ID, startTime)
-
-			// ... (rest of the regular node execution logic)
-			inputs := make([]*Value, 0, len(n.Requires))
-			for _, reqID := range n.Requires {
-				fmt.Printf("[DEBUG] Node %s waiting for input from %s\n", n.ID, reqID)
-				e := edge{from: reqID, to: n.ID}
-				select {
-				case <-ctx.Done():
-					fmt.Printf("[DEBUG] Context cancelled while node %s waiting for %s\n", n.ID, reqID)
-					result := output{err: ctx.Err()}
-					g.broadcastOutput(n.ID, result, edges)
-					return
-				case result := <-edges[e]:
-					fmt.Printf("[DEBUG] Node %s received input from %s (err: %v)\n", n.ID, reqID, result.err)
-					if result.err != nil {
-						result = output{err: fmt.Errorf("dependency %s failed: %w", reqID, result.err)}
-						g.broadcastOutput(n.ID, result, edges)
-						return
-					}
-					inputs = append(inputs, result.value)
-				}
-			}
-
-			fmt.Printf("[DEBUG] Node %s executing with %d inputs\n", n.ID, len(inputs))
-			value, err := executeNode(ctx, n, inputs)
-			result := output{value: value, err: err}
-			fmt.Printf("[DEBUG] Node %s execution completed with err: %v\n", n.ID, err)
-			g.broadcastOutput(n.ID, result, edges)
-
-			fmt.Printf("[DEBUG] Completed execution of node %s, took %v\n", n.ID, time.Since(startTime))
-
+			nc.runNode(ctx)
 		}(node)
 	}
 

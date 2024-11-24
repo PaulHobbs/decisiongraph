@@ -3,6 +3,8 @@ package dag
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -141,4 +143,53 @@ func TestContextCancellation(t *testing.T) {
 	if len(executed) == len(g.Nodes) {
 		t.Error("all nodes executed despite context cancellation")
 	}
+}
+
+func generateRandomDAG(numNodes int) (*Graph, error) {
+	g := NewGraph()
+	nodes := make([]string, numNodes)
+	for i := 0; i < numNodes; i++ {
+		nodes[i] = fmt.Sprintf("Node%d", i)
+	}
+
+	for i := 0; i < numNodes; i++ {
+		var numDependencies int
+		if i == 0 {
+			numDependencies = 0
+		} else {
+			numDependencies = rand.Intn(i) // A node can only depend on nodes with smaller index to avoid cycles.
+		}
+
+		dependencies := make([]string, 0)
+		for j := 0; j < numDependencies; j++ {
+			dependencyIndex := rand.Intn(i)
+			dependencies = append(dependencies, nodes[dependencyIndex])
+		}
+		err := g.AddNode(nodes[i], dependencies)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return g, nil
+}
+
+func FuzzDAGExecution(f *testing.F) {
+	f.Add(10) // Add an example seed corpus value.
+	f.Fuzz(func(t *testing.T, numNodes int) {
+		if numNodes <= 0 || numNodes > 50 { // Limit the number of nodes for practical testing.
+			return
+		}
+
+		g, err := generateRandomDAG(numNodes)
+		if err != nil {
+			t.Fatalf("failed to generate random DAG: %v", err)
+		}
+
+		err = g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
+			return &Value{NodeID: node.ID, Data: "result"}, nil
+		})
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	})
 }

@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-type Value struct {
+type Value[T any] struct {
 	NodeID string
-	Data   interface{}
+	Data   T
 }
 
 type Node struct {
@@ -17,14 +17,14 @@ type Node struct {
 	Requires []string
 }
 
-type Graph struct {
+type Graph[T any] struct {
 	Nodes map[string]*Node
 }
 
-type ExecuteNode func(context.Context, *Node, []*Value) (*Value, error)
+type ExecuteNode[T any] func(context.Context, *Node, []*Value[T]) (*Value[T], error)
 
-type output struct {
-	value *Value
+type output[T any] struct {
+	value *Value[T]
 	err   error
 }
 
@@ -33,13 +33,13 @@ type edge struct {
 	to   string
 }
 
-func NewGraph() *Graph {
-	return &Graph{
+func NewGraph[T any]() *Graph[T] {
+	return &Graph[T]{
 		Nodes: make(map[string]*Node),
 	}
 }
 
-func (g *Graph) AddNode(id string, requires []string) error {
+func (g *Graph[T]) AddNode(id string, requires []string) error {
 	fmt.Printf("[DEBUG] Adding node %s with dependencies %v\n", id, requires)
 	if _, exists := g.Nodes[id]; exists {
 		return fmt.Errorf("node %s already exists", id)
@@ -51,16 +51,16 @@ func (g *Graph) AddNode(id string, requires []string) error {
 	return nil
 }
 
-type nodeCtx struct {
+type nodeCtx[T any] struct {
 	self        *Node
-	ingress     map[edge]chan output
-	egress      map[edge]chan output
-	executeNode ExecuteNode
+	ingress     map[edge]chan output[T]
+	egress      map[edge]chan output[T]
+	executeNode ExecuteNode[T]
 }
 
-func newNodeCtx(self *Node, edges map[edge]chan output, executeNode ExecuteNode) nodeCtx {
-	ingress := make(map[edge]chan output)
-	egress := make(map[edge]chan output)
+func newNodeCtx[T any](self *Node, edges map[edge]chan output[T], executeNode ExecuteNode[T]) nodeCtx[T] {
+	ingress := make(map[edge]chan output[T])
+	egress := make(map[edge]chan output[T])
 	for e, channel := range edges {
 		if e.from == self.ID {
 			egress[e] = channel
@@ -68,10 +68,10 @@ func newNodeCtx(self *Node, edges map[edge]chan output, executeNode ExecuteNode)
 			ingress[e] = channel
 		}
 	}
-	return nodeCtx{self: self, ingress: ingress, egress: egress, executeNode: executeNode}
+	return nodeCtx[T]{self: self, ingress: ingress, egress: egress, executeNode: executeNode}
 }
 
-func (nc *nodeCtx) broadcast(result output) {
+func (nc *nodeCtx[T]) broadcast(result output[T]) {
 	fmt.Printf("[DEBUG] Broadcasting output from node %s (err: %v)\n", nc.self.ID, result.err)
 	for e, channel := range nc.egress {
 		fmt.Printf("[DEBUG] Sending output from %s to %s\n", e.from, e.to)
@@ -80,7 +80,7 @@ func (nc *nodeCtx) broadcast(result output) {
 	}
 }
 
-func (nc *nodeCtx) runFinish(ctx context.Context) []error {
+func (nc *nodeCtx[T]) runFinish(ctx context.Context) []error {
 	// Handle FINISH node differently: collect results instead of executing
 	fmt.Printf("[DEBUG] Starting FINISH node to collect results\n")
 	var leafErrors []error
@@ -106,24 +106,24 @@ func (nc *nodeCtx) runFinish(ctx context.Context) []error {
 
 }
 
-func (nc *nodeCtx) runNode(ctx context.Context) {
+func (nc *nodeCtx[T]) runNode(ctx context.Context) {
 	n := nc.self
 	startTime := time.Now()
 	fmt.Printf("[DEBUG] Starting execution of node %s at %v\n", n.ID, startTime)
 
-	inputs := make([]*Value, 0, len(n.Requires))
+	inputs := make([]*Value[T], 0, len(n.Requires))
 	for e, channel := range nc.ingress {
 		fmt.Printf("[DEBUG] Node %s waiting for input from %s\n", n.ID, e.from)
 		select {
 		case <-ctx.Done():
 			fmt.Printf("[DEBUG] Context cancelled while node %s waiting for %s\n", n.ID, e.from)
-			result := output{err: ctx.Err()}
+			result := output[T]{err: ctx.Err()}
 			nc.broadcast(result)
 			return
 		case result := <-channel:
 			fmt.Printf("[DEBUG] Node %s received input from %s (err: %v)\n", n.ID, e.from, result.err)
 			if result.err != nil {
-				result = output{err: fmt.Errorf("dependency %s failed: %w", e.from, result.err)}
+				result = output[T]{err: fmt.Errorf("dependency %s failed: %w", e.from, result.err)}
 				nc.broadcast(result)
 				return
 			}
@@ -133,14 +133,14 @@ func (nc *nodeCtx) runNode(ctx context.Context) {
 
 	fmt.Printf("[DEBUG] Node %s executing with %d inputs\n", n.ID, len(inputs))
 	value, err := nc.executeNode(ctx, n, inputs)
-	result := output{value: value, err: err}
+	result := output[T]{value: value, err: err}
 	fmt.Printf("[DEBUG] Node %s execution completed with err: %v\n", n.ID, err)
 	nc.broadcast(result)
 
 	fmt.Printf("[DEBUG] Completed execution of node %s, took %v\n", n.ID, time.Since(startTime))
 }
 
-func (g *Graph) Run(ctx context.Context, executeNode ExecuteNode) error {
+func (g *Graph[T]) Run(ctx context.Context, executeNode ExecuteNode[T]) error {
 	fmt.Printf("[DEBUG] Starting graph execution at %v\n", time.Now())
 
 	// Find leaf nodes (nodes that no other nodes depend on)
@@ -165,11 +165,11 @@ func (g *Graph) Run(ctx context.Context, executeNode ExecuteNode) error {
 	g.Nodes["FINISH"] = finishNode
 
 	// Create channels for each edge in the graph
-	edges := make(map[edge]chan output)
+	edges := make(map[edge]chan output[T])
 	for _, node := range g.Nodes {
 		for _, reqID := range node.Requires {
 			e := edge{from: reqID, to: node.ID}
-			edges[e] = make(chan output, 1)
+			edges[e] = make(chan output[T], 1)
 			fmt.Printf("[DEBUG] Created channel for edge %s -> %s\n", reqID, node.ID)
 		}
 	}

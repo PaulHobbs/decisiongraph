@@ -11,7 +11,7 @@ import (
 )
 
 func TestNodeExecutionCount(t *testing.T) {
-	g := NewGraph()
+	g := NewGraph[string]()
 	g.AddNode("A", nil)
 	g.AddNode("B1", []string{"A"})
 	g.AddNode("B2", []string{"A"})
@@ -20,11 +20,11 @@ func TestNodeExecutionCount(t *testing.T) {
 	executionCounts := make(map[string]int)
 	var mu sync.Mutex
 
-	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
+	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value[string]) (*Value[string], error) {
 		mu.Lock()
 		executionCounts[node.ID]++
 		mu.Unlock()
-		return &Value{NodeID: node.ID, Data: "result"}, nil
+		return &Value[string]{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err != nil {
@@ -39,7 +39,7 @@ func TestNodeExecutionCount(t *testing.T) {
 }
 
 func TestParallelExecution(t *testing.T) {
-	g := NewGraph()
+	g := NewGraph[string]()
 	g.AddNode("A", nil)
 	g.AddNode("B1", []string{"A"})
 	g.AddNode("B2", []string{"A"})
@@ -50,12 +50,12 @@ func TestParallelExecution(t *testing.T) {
 		executionTimes = make(map[string]time.Time)
 	)
 
-	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
+	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value[string]) (*Value[string], error) {
 		mu.Lock()
 		executionTimes[node.ID] = time.Now()
 		mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
-		return &Value{NodeID: node.ID, Data: "result"}, nil
+		return &Value[string]{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err != nil {
@@ -77,7 +77,7 @@ func TestParallelExecution(t *testing.T) {
 }
 
 func TestErrorPropagation(t *testing.T) {
-	g := NewGraph()
+	g := NewGraph[string]()
 	g.AddNode("A", nil)
 	g.AddNode("B", []string{"A"})
 	g.AddNode("C", []string{"B"})
@@ -87,7 +87,7 @@ func TestErrorPropagation(t *testing.T) {
 	executed := make(map[string]bool)
 	var mu sync.Mutex
 
-	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
+	err := g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value[string]) (*Value[string], error) {
 		mu.Lock()
 		executed[node.ID] = true
 		mu.Unlock()
@@ -95,7 +95,7 @@ func TestErrorPropagation(t *testing.T) {
 		if node.ID == "B" {
 			return nil, expectedErr
 		}
-		return &Value{NodeID: node.ID, Data: "result"}, nil
+		return &Value[string]{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err == nil {
@@ -114,7 +114,7 @@ func TestErrorPropagation(t *testing.T) {
 }
 
 func TestContextCancellation(t *testing.T) {
-	g := NewGraph()
+	g := NewGraph[string]()
 	g.AddNode("A", nil)
 	g.AddNode("B", []string{"A"})
 
@@ -128,12 +128,12 @@ func TestContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := g.Run(ctx, func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
+	err := g.Run(ctx, func(ctx context.Context, node *Node, inputs []*Value[string]) (*Value[string], error) {
 		mu.Lock()
 		executed[node.ID] = true
 		mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
-		return &Value{NodeID: node.ID, Data: "result"}, nil
+		return &Value[string]{NodeID: node.ID, Data: "result"}, nil
 	})
 
 	if err == nil {
@@ -145,9 +145,9 @@ func TestContextCancellation(t *testing.T) {
 	}
 }
 
-func generateRandomDAG(numNodes int, seed int64) (*Graph, error) {
+func generateRandomDAG[T any](numNodes int, seed int64) (*Graph[T], error) {
 	gen := rand.New(rand.NewSource(seed))
-	g := NewGraph()
+	g := NewGraph[T]()
 	fmt.Printf("numNodes: %d\n", numNodes)
 	nodes := make([]string, numNodes)
 	for i := 0; i < numNodes; i++ {
@@ -165,7 +165,9 @@ func generateRandomDAG(numNodes int, seed int64) (*Graph, error) {
 		dependencies := make([]string, 0)
 		for j := 0; j < numDependencies; j++ {
 			dependencyIndex := gen.Intn(i)
-			dependencies = append(dependencies, nodes[dependencyIndex])
+			if i > 0 {
+				dependencies = append(dependencies, nodes[dependencyIndex])
+			}
 		}
 		err := g.AddNode(nodes[i], dependencies)
 		if err != nil {
@@ -182,13 +184,13 @@ func FuzzDAGExecution(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, numNodes uint, seed int64) {
 		numNodes = (numNodes % 100) + 1
-		g, err := generateRandomDAG(int(numNodes), seed)
+		g, err := generateRandomDAG[string](int(numNodes), seed)
 		if err != nil {
 			t.Fatalf("failed to generate random DAG: %v", err)
 		}
 
-		err = g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value) (*Value, error) {
-			return &Value{NodeID: node.ID, Data: "result"}, nil
+		err = g.Run(context.Background(), func(ctx context.Context, node *Node, inputs []*Value[string]) (*Value[string], error) {
+			return &Value[string]{NodeID: node.ID, Data: "result"}, nil
 		})
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)

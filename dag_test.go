@@ -148,7 +148,6 @@ func TestContextCancellation(t *testing.T) {
 func generateRandomDAG[T any](numNodes int, seed int64) (*Graph[T], error) {
 	gen := rand.New(rand.NewSource(seed))
 	g := NewGraph[T]()
-	fmt.Printf("numNodes: %d\n", numNodes)
 	nodes := make([]string, numNodes)
 	for i := 0; i < numNodes; i++ {
 		nodes[i] = fmt.Sprintf("Node%d", i)

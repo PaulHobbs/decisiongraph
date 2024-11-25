@@ -1,30 +1,38 @@
 package dag
 
-func cached[T any](
-    save func(string, *Value[T]) error,
-    load func(string) (*Value[T], error),
-    runnode ExecuteNode[T],
-) ExecuteNode[T] {
-    return func(ctx context.Context, node *Node, inputs []*Value[T]) (*Value[T], error) {
-        // Attempt to load cached result for this node
-        cachedValue, err := load(node.ID)
-        if err == nil {
-            // Cache hit: return the cached value
-            return cachedValue, nil
-        }
+import (
+	"context"
+	"fmt"
+)
 
-        // Cache miss: execute the actual node logic
-        result, err := runnode(ctx, node, inputs)
-        if err != nil {
-            return nil, err // Propagate any errors from the node execution
-        }
+type Middleware[T, U] func(ExecuteNode[T]) ExecuteNode[U]
 
-        // Save the result to cache for future executions
-        if saveErr := save(node.ID, result); saveErr != nil {
-            // Log or handle caching error (optional)
-            fmt.Printf("Warning: failed to cache result for node %s: %v\n", node.ID, saveErr)
-        }
+// Cached is a ExecuteNode middleware for saving and loading node results. This can allow for resumable graphs by using external storage.
+func Cached[T any](
+    save func(string, []*T, *T) error,
+    load func(string) (*T, error)) Middleware[T, T] {
+    return func(runnode ExecuteNode[T]) ExecuteNode[T] {
+        return func(ctx context.Context, node *Node, inputs []*Value[T]) (*Value[T], error) {
+            // Attempt to load cached result for this node
+            cachedValue, err := load(node.ID)
+            if err == nil {
+                // Cache hit: return the cached value
+                return cachedValue, nil
+            }
 
-        return result, nil
+            // Cache miss: execute the actual node logic
+            result, err := runnode(ctx, node, inputs)
+            if err != nil {
+                return nil, err // Propagate any errors from the node execution
+            }
+
+            // Save the result to cache for future executions
+            if saveErr := save(node.ID, inputs, result); saveErr != nil {
+                // Log or handle caching error (optional)
+                fmt.Printf("Warning: failed to cache result for node %s: %v\n", node.ID, saveErr)
+            }
+
+            return result, nil
+        }
     }
 }

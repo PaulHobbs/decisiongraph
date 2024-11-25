@@ -9,8 +9,8 @@ type Middleware[T any, U any] func(ExecuteNode[T]) ExecuteNode[U]
 
 // Cached is a ExecuteNode middleware for saving and loading node results. This can allow for resumable graphs by using external storage.
 func Cached[T any](
-    save func(string, []*T, *T) error,
-    load func(string) (*T, error)) Middleware[T, T] {
+    save func(string, []*Value[T], *Value[T]) error,
+    load func(string) (*Value[T], error)) Middleware[T, T] {
     return func(runnode ExecuteNode[T]) ExecuteNode[T] {
         return func(ctx context.Context, node *Node, inputs []*Value[T]) (*Value[T], error) {
             // Attempt to load cached result for this node

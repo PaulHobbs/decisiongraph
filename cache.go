@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-type Middleware[T, U] func(ExecuteNode[T]) ExecuteNode[U]
+type Middleware[T any, U any] func(ExecuteNode[T]) ExecuteNode[U]
 
 // Cached is a ExecuteNode middleware for saving and loading node results. This can allow for resumable graphs by using external storage.
 func Cached[T any](
